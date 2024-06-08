@@ -3,7 +3,7 @@
 
 import os
 
-from comnetsemu.cli import CLI, spawnXtermDocker
+from comnetsemu.cli import CLI
 from comnetsemu.net import Containernet, VNFManager
 from mininet.link import TCLink
 from mininet.log import info, setLogLevel
@@ -45,9 +45,15 @@ if __name__ == "__main__":
     )
     srv2 = mgr.addContainer("srv2", "h2", "dev_test", "bash", docker_args={})
 
+    # Perform ping test between srv1 and srv2
+    ping_result = net.ping([srv1, srv2])
+
+    # Print ping results
+    info("\n*** Ping Results ***\n")
+    for src, dest, result in ping_result:
+        info(f"{src.name} -> {dest.name}: {result}\n")
+
     if not AUTOTEST_MODE:
-        # Cannot spawn xterm for srv1 since BASH is not installed in the image:
-        # echo_server.
         # spawnXtermDocker("srv2")
         CLI(net)
 
