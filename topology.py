@@ -4,10 +4,10 @@
 import os
 
 from comnetsemu.cli import CLI
-from comnetsemu.net import Containernet, VNFManager
+from comnetsemu.net import Containernet
 from mininet.link import TCLink
 from mininet.log import info, setLogLevel
-from mininet.node import Controller
+from mininet.node import Controller, Docker
 
 if __name__ == "__main__":
 
@@ -17,7 +17,6 @@ if __name__ == "__main__":
     setLogLevel("info")
 
     net = Containernet(controller=Controller, link=TCLink, xterms=False)
-    mgr = VNFManager(net)
 
     info("*** Add controller\n")
     net.addController("c0")
@@ -40,10 +39,17 @@ if __name__ == "__main__":
     info("\n*** Starting network\n")
     net.start()
 
-    srv1 = mgr.addContainer(
-        "srv1", "h1", "echo_server", "python /home/server.py", docker_args={}
+    # Add srv1 and srv2 as Docker containers
+    srv1 = net.addDocker(
+        "srv1", dimage="echo_server", ip="10.0.0.3", docker_args={"hostname": "srv1"}
     )
-    srv2 = mgr.addContainer("srv2", "h2", "dev_test", "bash", docker_args={})
+    srv2 = net.addDocker(
+        "srv2", dimage="dev_test", ip="10.0.0.4", docker_args={"hostname": "srv2"}
+    )
+
+    # Connect srv1 and srv2 to switches
+    net.addLink(srv1, switch1)
+    net.addLink(srv2, switch2)
 
     # Perform ping test between srv1 and srv2
     ping_result = net.ping([srv1, srv2])
@@ -54,10 +60,6 @@ if __name__ == "__main__":
         info(f"{src.name} -> {dest.name}: {result}\n")
 
     if not AUTOTEST_MODE:
-        # spawnXtermDocker("srv2")
         CLI(net)
 
-    mgr.removeContainer("srv1")
-    mgr.removeContainer("srv2")
     net.stop()
-    mgr.stop()
