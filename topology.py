@@ -4,7 +4,6 @@
 """
 About: Basic example of service (running inside a APPContainer) migration.
 """
-ty
 import os
 import shlex
 import time
