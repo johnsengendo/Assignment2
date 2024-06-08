@@ -1,13 +1,34 @@
-#! /usr/bin/env python3
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+"""
+About: Basic example of service (running inside a APPContainer) migration.
+"""
+ty
 import os
+import shlex
+import time
+
+from subprocess import check_output
 
 from comnetsemu.cli import CLI
-from comnetsemu.net import Containernet
+from comnetsemu.net import Containernet, VNFManager
 from mininet.link import TCLink
 from mininet.log import info, setLogLevel
-from mininet.node import Controller, Docker
+from mininet.node import Controller
+
+
+def get_ofport(ifce: str):
+    """Get the openflow port based on the iterface name.
+
+    :param ifce (str): Name of the interface.
+    """
+    return (
+        check_output(shlex.split("ovs-vsctl get Interface {} ofport".format(ifce)))
+        .decode("utf-8")
+        .strip()
+    )
+
 
 if __name__ == "__main__":
 
@@ -17,49 +38,113 @@ if __name__ == "__main__":
     setLogLevel("info")
 
     net = Containernet(controller=Controller, link=TCLink, xterms=False)
+    mgr = VNFManager(net)
 
-    info("*** Add controller\n")
+    info("*** Add the default controller\n")
     net.addController("c0")
 
-    info("*** Creating hosts\n")
+    info("*** Creating the client and hosts\n")
     h1 = net.addDockerHost(
-        "h1", dimage="dev_test", ip="10.0.0.1", docker_args={"hostname": "h1"}
+        "h1", dimage="dev_test", ip="10.0.0.11/24", docker_args={"hostname": "h1"}
     )
+
     h2 = net.addDockerHost(
-        "h2", dimage="dev_test", ip="10.0.0.2", docker_args={"hostname": "h2"}
+        "h2",
+        dimage="dev_test",
+        ip="10.0.0.12/24",
+        docker_args={"hostname": "h2", "pid_mode": "host"},
+    )
+    h3 = net.addDockerHost(
+        "h3",
+        dimage="dev_test",
+        ip="10.0.0.12/24",
+        docker_args={"hostname": "h3", "pid_mode": "host"},
     )
 
     info("*** Adding switch and links\n")
-    switch1 = net.addSwitch("s1")
-    switch2 = net.addSwitch("s2")
-    net.addLink(switch1, h1, bw=10, delay="10ms")
-    net.addLink(switch1, switch2, bw=10, delay="10ms")
-    net.addLink(switch2, h2, bw=10, delay="10ms")
+    s1 = net.addSwitch("s1")
+    net.addLinkNamedIfce(s1, h1, bw=1000, delay="5ms")
+    # Add the interfaces for service traffic.
+    net.addLinkNamedIfce(s1, h2, bw=1000, delay="5ms")
+    net.addLinkNamedIfce(s1, h3, bw=1000, delay="5ms")
+    # Add the interface for host internal traffic.
+    net.addLink(
+        s1, h2, bw=1000, delay="1ms", intfName1="s1-h2-int", intfName2="h2-s1-int"
+    )
+    net.addLink(
+        s1, h3, bw=1000, delay="1ms", intfName1="s1-h3-int", intfName2="h3-s1-int"
+    )
 
     info("\n*** Starting network\n")
     net.start()
 
-    # Add srv1 and srv2 as Docker containers
-    srv1 = net.addDocker(
-        "srv1", dimage="echo_server", ip="10.0.0.3", docker_args={"hostname": "srv1"}
+    s1_h1_port_num = get_ofport("s1-h1")
+    s1_h2_port_num = get_ofport("s1-h2")
+    s1_h3_port_num = get_ofport("s1-h3")
+    h2_mac = h2.MAC(intf="h2-s1")
+    h3_mac = h3.MAC(intf="h3-s1")
+
+    h2.setMAC("00:00:00:00:00:12", intf="h2-s1")
+    h3.setMAC("00:00:00:00:00:12", intf="h3-s1")
+
+    info("*** Use the subnet 192.168.0.0/24 for internal traffic between h2 and h3.\n")
+    print("- Internal IP of h2: 192.168.0.12")
+    print("- Internal IP of h3: 192.168.0.13")
+    h2.cmd("ip addr add 192.168.0.12/24 dev h2-s1-int")
+    h3.cmd("ip addr add 192.168.0.13/24 dev h3-s1-int")
+    h2.cmd("ping -c 3 192.168.0.13")
+
+    # INFO: For the simplicity, OpenFlow rules are managed directly via
+    # `ovs-ofctl` utility provided by the OvS.
+    # For realistic setup, switches should be managed by a remote controller.
+    info("*** Add flow to forward traffic from h1 to h2 to switch s1.\n")
+    check_output(
+        shlex.split(
+            'ovs-ofctl add-flow s1 "in_port={}, actions=output:{}"'.format(
+                s1_h1_port_num, s1_h2_port_num
+            )
+        )
     )
-    srv2 = net.addDocker(
-        "srv2", dimage="dev_test", ip="10.0.0.4", docker_args={"hostname": "srv2"}
+    check_output(
+        shlex.split(
+            'ovs-ofctl add-flow s1 "in_port={}, actions=output:{}"'.format(
+                s1_h2_port_num, s1_h1_port_num
+            )
+        )
+    )
+    check_output(
+        shlex.split(
+            'ovs-ofctl add-flow s1 "in_port={}, actions=output:{}"'.format(
+                s1_h3_port_num, s1_h1_port_num
+            )
+        )
     )
 
-    # Connect srv1 and srv2 to switches
-    net.addLink(srv1, switch1)
-    net.addLink(srv2, switch2)
+    info("*** h1 ping 10.0.0.12 with 3 packets: \n")
+    ret = h1.cmd("ping -c 3 10.0.0.12")
+    print(ret)
 
-    # Perform ping test between srv1 and srv2
-    ping_result = net.ping([srv1, srv2])
-
-    # Print ping results
-    info("\n*** Ping Results ***\n")
-    for src, dest, result in ping_result:
-        info(f"{src.name} -> {dest.name}: {result}\n")
-
+    info("*** Deploy counter service on h2.\n")
+    counter_server_h2 = mgr.addContainer(
+        "counter_server_h2", "h2", "service_migration", "python /home/server.py h2"
+    )
+    time.sleep(3)
+    info("*** Deploy client app on h1.\n")
+    client_app = mgr.addContainer(
+        "client", "h1", "service_migration", "python /home/client.py"
+    )
+    time.sleep(10)
+    client_log = client_app.getLogs()
+    print("\n*** Setup1: Current log of the client: \n{}".format(client_log))
+    
     if not AUTOTEST_MODE:
         CLI(net)
 
-    net.stop()
+    try:
+        mgr.removeContainer("counter_server_h2")
+        mgr.removeContainer("counter_server_h3")
+    except Exception as e:
+        print(e)
+    finally:
+        net.stop()
+        mgr.stop()
