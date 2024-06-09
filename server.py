@@ -1,63 +1,49 @@
-#! /usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-"""
-About: Simple server for counting.
-"""
-
-import argparse
 import signal
 import socket
 import time
+import cv2
 
 INTERNAL_IP_H2 = "192.168.0.12"
 INTERNAL_PORT = 9999
 SERVICE_IP = "10.0.0.12"
 SERVICE_PORT = 8888
 
-def recv_state():
-    """Get the latest counter state from the internal network."""
-    recv_ip = INTERNAL_IP_H2
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind((recv_ip, INTERNAL_PORT))
+def term_signal_handler(signum, frame):
+    print("Received signal to terminate. Exiting...")
+    exit(0)
 
-    state, _ = sock.recvfrom(1024)
-    state = int(state.decode("utf-8"))
-    return state
+signal.signal(signal.SIGTERM, term_signal_handler)
 
-def run(get_state=False):
-    """Run the couting service and handle sigterm signal."""
-    counter = 0
-    if get_state:
-        counter = recv_state()
-        print("Get the init counter state: {}".format(counter))
+# Open the video file for reading and extract its metadata
+cap = cv2.VideoCapture("big_buck_bunny_720p_5mb.mp4")
+width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+fps = cap.get(cv2.CAP_PROP_FPS)
 
-    # Use closure to avoid using a global variable for state.
-    def term_signal_handler(signum, frame):
-        # Send duplicated packets to avoid losses.
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        for _ in range(6):
-            sock.sendto(str(counter).encode("utf-8"), (INTERNAL_IP_H2, INTERNAL_PORT))
-        sock.close()
+# Create a UDP socket and bind it to the specified IP address and port
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.bind((SERVICE_IP, SERVICE_PORT))
 
-    signal.signal(signal.SIGTERM, term_signal_handler)
+# Read and send frames from the video file until it's exhausted
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        break
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind((SERVICE_IP, SERVICE_PORT))
+    # Compress the frame using H.264 and send it over the network
+    _, buf = cv2.imencode(".h264", frame, [
+        cv2.IMWRITE_H264_PARAMS_KEY,
+        dict(
+            profile=cv2.VIDEO_WRITER_H264_PROFILE_BASELINE,
+            level=cv2.VIDEO_WRITER_H264_LEVEL_3_0,
+            keyint=30
+        )
+    ])
+    sock.sendto(buf, (INTERNAL_IP_H2, INTERNAL_PORT))
 
-    while True:
-        # Block here waiting for data input.
-        _, addr = sock.recvfrom(1024)
-        counter += 1
-        sock.sendto(str(counter).encode("utf-8"), addr)
-        time.sleep(0.5)
+    # Sleep for a short time to prevent the server from using too much CPU time
+    time.sleep(1 / fps)
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Simple counting server.")
-    parser.add_argument(
-        "--get_state", action="store_true", help="Get state from network."
-    )
-
-    args = parser.parse_args()
-
-    run(args.get_state)
+# Release the video file and close the socket
+cap.release()
+sock.close()
