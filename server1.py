@@ -15,7 +15,7 @@ def term_signal_handler(signum, frame):
 signal.signal(signal.SIGTERM, term_signal_handler)
 
 # Open the video file for reading and extract its metadata
-cap = cv2.VideoCapture("big_buck_bunny_720p_5mb.mp4")
+cap = cv2.VideoCapture("python /home/big_buck_bunny_720p_5mb.mp4")
 width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
 height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 fps = cap.get(cv2.CAP_PROP_FPS)
