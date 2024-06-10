@@ -125,12 +125,12 @@ if __name__ == "__main__":
 
     info("*** Deploy counter service on h2.\n")
     counter_server_h2 = mgr.addContainer(
-        "counter_server_h2", "h2", "service_migration", "python /home/server.py h2"
+        "counter_server_h2", "h2", "service_migration", "python /home/server1.py h2"
     )
     time.sleep(3)
     info("*** Deploy client app on h1.\n")
     client_app = mgr.addContainer(
-        "client", "h1", "service_migration", "python /home/client.py"
+        "client", "h1", "service_migration", "python /home/client1.py"
     )
     time.sleep(10)
     client_log = client_app.getLogs()
